@@ -34,6 +34,44 @@ function loadState() {
   } catch(e) { return {}; }
 }
 
+function clearState() {
+  try {
+    localStorage.removeItem('ctw_nick');
+    localStorage.removeItem('ctw_roomId');
+    localStorage.removeItem('ctw_youId');
+  } catch(e) {}
+}
+
+// ---------- Logout ----------
+function logout() {
+  // Disconnect WebSocket
+  if (ws) {
+    ws.close();
+    ws = null;
+  }
+  
+  // Clear all state
+  clearState();
+  nick = '';
+  youId = null;
+  roomId = null;
+  hostId = null;
+  currentRoom = null;
+  selectedLetter = null;
+  stopTimer();
+  
+  // Reset UI
+  $('nick').value = '';
+  $('log').innerHTML = '';
+  $('rejected').textContent = '';
+  $('wordInput').value = '';
+  document.querySelectorAll('.lbtn').forEach(b => b.classList.remove('sel'));
+  
+  // Show login screen
+  show('login');
+  toast('Nag-logout ka na. 👋');
+}
+
 // ---------- connection ----------
 function connect(){
   const proto = location.protocol==='https:'?'wss':'ws';
@@ -101,6 +139,10 @@ $('nick').addEventListener('keydown',e=>{ if(e.key==='Enter') $('enterBtn').clic
 // ---------- lobby ----------
 $('refreshBtn').onclick=watchLobby;
 $('createBtn').onclick=()=>{ sendMsg({type:'createRoom', nick, roomName:`${nick}'s Room`}); };
+
+// Add logout button to lobby
+$('logoutBtn').onclick=logout;
+
 function renderRooms(rooms){
   const el=$('roomlist');
   if(!rooms || !rooms.length){ 
@@ -143,6 +185,9 @@ $('leaveBtn').onclick=()=>{
   watchLobby(); 
 };
 $('startBtn').onclick=()=>sendMsg({type:'startGame'});
+
+// Add logout button to room
+$('roomLogoutBtn').onclick=logout;
 
 function renderRoom(room){
   $('roomTitle').textContent=room.name;
@@ -274,6 +319,9 @@ $('backLobbyBtn').onclick=()=>{
   show('lobby'); 
   watchLobby(); 
 };
+
+// Add logout button to game over
+$('overLogoutBtn').onclick=logout;
 
 // ---------- overlay countdown ----------
 function showCountdown(v){
