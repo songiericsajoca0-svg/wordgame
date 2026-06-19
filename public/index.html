@@ -49,14 +49,17 @@
   .btn:active{transform:scale(.97)}
   .btn.sec{background:rgba(255,255,255,.12);box-shadow:none}
   .btn.good{background:linear-gradient(90deg,#3ddc97,#2bb673)}
+  .btn.danger{background:linear-gradient(90deg,#ff5e5e,#cc3333)}
   .btn:disabled{opacity:.45;cursor:not-allowed}
   .btn.small{width:auto;padding:9px 16px;font-size:14px;margin:0}
+  .btn.small.danger{background:linear-gradient(90deg,#ff5e5e,#cc3333);box-shadow:0 4px 12px rgba(255,94,94,.3)}
 
   .row{display:flex;gap:10px;align-items:center}
   .spread{justify-content:space-between}
 
   /* Lobby */
-  .lobby-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+  .lobby-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px}
+  .lobby-head .left{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   .pill{background:var(--card2);padding:7px 13px;border-radius:30px;font-size:13px}
   .roomlist{display:flex;flex-direction:column;gap:10px;max-height:46vh;overflow-y:auto;margin:6px 0 4px}
   .roomitem{background:var(--card2);border:1px solid rgba(255,255,255,.08);border-radius:14px;
@@ -160,8 +163,11 @@
     <div class="logo"><h1>Lobby</h1></div>
     <div class="card">
       <div class="lobby-head">
-        <span class="pill">👤 <b id="lobbyNick"></b></span>
-        <button class="btn small sec" id="refreshBtn">↻ Refresh</button>
+        <div class="left">
+          <span class="pill">👤 <b id="lobbyNick"></b></span>
+          <button class="btn small sec" id="refreshBtn">↻ Refresh</button>
+        </div>
+        <button class="btn small danger" id="logoutBtn">🚪 Logout</button>
       </div>
       <button class="btn" id="createBtn">➕ Gumawa ng Room</button>
       <div style="margin:16px 0 8px;color:var(--muted);font-size:13px;letter-spacing:1px">AVAILABLE ROOMS</div>
@@ -175,7 +181,10 @@
     <div class="card">
       <div class="lobby-head">
         <span class="pill" id="roomStatePill">Naghihintay…</span>
-        <button class="btn small sec" id="leaveBtn">← Umalis</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn small sec" id="leaveBtn">← Umalis</button>
+          <button class="btn small danger" id="roomLogoutBtn">🚪 Logout</button>
+        </div>
       </div>
       <div class="players" id="roomPlayers"></div>
       <button class="btn good" id="startBtn">▶ Simulan ang Laro</button>
@@ -186,6 +195,9 @@
   <!-- GAME -->
   <section class="screen" id="screen-game">
     <div class="card">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+        <button class="btn small danger" id="gameLogoutBtn">🚪 Logout</button>
+      </div>
       <div class="players" id="gamePlayers"></div>
 
       <div class="stage">
@@ -217,6 +229,7 @@
       </div>
       <button class="btn good" id="againBtn">🔁 Maglaro Ulit</button>
       <button class="btn sec" id="backLobbyBtn">← Balik sa Lobby</button>
+      <button class="btn danger" id="overLogoutBtn">🚪 Logout</button>
     </div>
   </section>
 
