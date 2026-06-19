@@ -48,6 +48,8 @@ const MAX_PLAYERS = 4;
 const MIN_PLAYERS = 2;
 const START_LETTERS_COUNT = 4;
 const RECONNECT_GRACE_MS = 60_000; // how long a disconnected player can rejoin
+const WRONG_WORD_PENALTY_MS = 2000; // -2 seconds per wrong word
+const MIN_TURN_REMAINING_MS = 250;  // never push deadline before "now+250ms"
 const FRIENDLY_LETTERS = 'ABCDEFGHILMNOPRSTUW';
 
 function uid() { return Math.random().toString(36).slice(2, 10); }
@@ -287,6 +289,47 @@ function advanceTurn(room) {
   startTurnTimer(room);
 }
 
+// Reject a word AND penalize the current turn by removing 2 seconds.
+// If the new remaining time is too low, force an immediate timeout (heart loss).
+function rejectWithPenalty(room, player, reason) {
+  // tell the rejecter what went wrong
+  if (player.ws && player.ws.readyState === player.ws.OPEN) {
+    player.ws.send(JSON.stringify({ type: 'rejected', reason, penaltyMs: WRONG_WORD_PENALTY_MS }));
+  }
+  // broadcast penalty event to everyone (for log + sound + visual)
+  sendRoom(room, {
+    type: 'penalty',
+    playerId: player.id,
+    nick: player.nick,
+    reason,
+    penaltyMs: WRONG_WORD_PENALTY_MS,
+  });
+  roomEvent(room, `⚠️ ${player.nick}: ${reason} (-2s ⏱️)`, 'timeout');
+
+  // shrink the turn deadline by 2 seconds
+  const now = Date.now();
+  const remaining = (room.turnDeadline || now) - now;
+  const newRemaining = remaining - WRONG_WORD_PENALTY_MS;
+  if (newRemaining <= MIN_TURN_REMAINING_MS) {
+    // Out of time — trigger timeout immediately
+    clearTurnTimer(room);
+    room.turnDeadline = now;
+    onTimeout(room);
+    return;
+  }
+  // Reschedule the turn timer with the reduced deadline
+  clearTurnTimer(room);
+  room.turnDeadline = now + newRemaining;
+  // Notify clients of the new deadline so timers stay in sync
+  sendRoom(room, {
+    type: 'deadlineUpdate',
+    turnPlayerId: room.order[room.turnIndex],
+    deadline: room.turnDeadline,
+    reason: 'wrongWord',
+  });
+  room.timer = setTimeout(() => onTimeout(room), newRemaining);
+}
+
 function handleWord(room, player, rawWord) {
   if (room.state !== 'playing') return;
   if (player.isSpectator || !player.alive) {
@@ -295,41 +338,39 @@ function handleWord(room, player, rawWord) {
   }
   const pid = room.order[room.turnIndex];
   if (pid !== player.id) {
+    // not their turn — don't penalize someone else's turn timer
     player.ws.send(JSON.stringify({ type: 'rejected', reason: 'Hindi pa ikaw ang turn.' }));
     return;
   }
   const word = String(rawWord || '').trim().toLowerCase();
+
+  // === pick-mode: must start with one of the start letters ===
   if (room.currentLetter === null) {
     if (!/^[a-z]+$/.test(word) || word.length < 2) {
-      player.ws.send(JSON.stringify({ type: 'rejected', reason: 'Letters lang at least 2 ang haba.' }));
-      return;
+      return rejectWithPenalty(room, player, 'Letters lang at least 2 ang haba.');
     }
     if (!room.startLetters.map(l => l.toLowerCase()).includes(word[0])) {
-      player.ws.send(JSON.stringify({ type: 'rejected', reason: `Dapat magsimula sa isa sa: ${room.startLetters.join(', ')}` }));
-      return;
+      return rejectWithPenalty(room, player, `Dapat magsimula sa isa sa: ${room.startLetters.join(', ')}`);
     }
     if (!DICT.has(word)) {
-      player.ws.send(JSON.stringify({ type: 'rejected', reason: `"${word}" ay wala sa diksyunaryo.` }));
-      return;
+      return rejectWithPenalty(room, player, `"${word}" ay wala sa diksyunaryo.`);
     }
     acceptWord(room, player, word);
     return;
   }
+
+  // === normal mode ===
   if (!/^[a-z]+$/.test(word) || word.length < 2) {
-    player.ws.send(JSON.stringify({ type: 'rejected', reason: 'Letters lang at least 2 ang haba.' }));
-    return;
+    return rejectWithPenalty(room, player, 'Letters lang at least 2 ang haba.');
   }
   if (word[0] !== room.currentLetter.toLowerCase()) {
-    player.ws.send(JSON.stringify({ type: 'rejected', reason: `Dapat magsimula sa "${room.currentLetter.toUpperCase()}".` }));
-    return;
+    return rejectWithPenalty(room, player, `Dapat magsimula sa "${room.currentLetter.toUpperCase()}".`);
   }
   if (room.usedWords.has(word)) {
-    player.ws.send(JSON.stringify({ type: 'rejected', reason: `"${word}" ay nagamit na.` }));
-    return;
+    return rejectWithPenalty(room, player, `"${word}" ay nagamit na.`);
   }
   if (!DICT.has(word)) {
-    player.ws.send(JSON.stringify({ type: 'rejected', reason: `"${word}" ay wala sa diksyunaryo.` }));
-    return;
+    return rejectWithPenalty(room, player, `"${word}" ay wala sa diksyunaryo.`);
   }
   acceptWord(room, player, word);
 }
