@@ -49,17 +49,14 @@
   .btn:active{transform:scale(.97)}
   .btn.sec{background:rgba(255,255,255,.12);box-shadow:none}
   .btn.good{background:linear-gradient(90deg,#3ddc97,#2bb673)}
-  .btn.danger{background:linear-gradient(90deg,#ff5e5e,#cc3333)}
   .btn:disabled{opacity:.45;cursor:not-allowed}
   .btn.small{width:auto;padding:9px 16px;font-size:14px;margin:0}
-  .btn.small.danger{background:linear-gradient(90deg,#ff5e5e,#cc3333);box-shadow:0 4px 12px rgba(255,94,94,.3)}
 
   .row{display:flex;gap:10px;align-items:center}
   .spread{justify-content:space-between}
 
   /* Lobby */
-  .lobby-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px}
-  .lobby-head .left{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .lobby-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
   .pill{background:var(--card2);padding:7px 13px;border-radius:30px;font-size:13px}
   .roomlist{display:flex;flex-direction:column;gap:10px;max-height:46vh;overflow-y:auto;margin:6px 0 4px}
   .roomitem{background:var(--card2);border:1px solid rgba(255,255,255,.08);border-radius:14px;
@@ -74,15 +71,19 @@
     border:2px solid transparent;transition:.2s}
   .pcard.turn{border-color:var(--warn);box-shadow:0 0 18px rgba(255,209,102,.35);background:rgba(255,209,102,.10)}
   .pcard.dead{opacity:.4;filter:grayscale(.7)}
-  .pcard.spectator{opacity:.5;border-color:rgba(255,255,255,.1)}
+  .pcard.spectator{background:rgba(124,92,255,.10);border-style:dashed;border-color:rgba(124,92,255,.4)}
+  .pcard.offline{opacity:.55}
+  .tag.spec{background:#7c5cff;color:#fff}
+  .tag.off{background:#555;color:#ddd}
+  .badge.live{display:inline-block;background:#3ddc97;color:#04221a;font-size:10px;font-weight:800;padding:2px 7px;border-radius:20px;margin-left:6px;letter-spacing:1px;vertical-align:middle;animation:pulse 1.4s ease infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
   .avatar{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;
     font-weight:800;font-size:18px;color:#1a1633;flex-shrink:0}
-  .pname{font-weight:700;flex:1;display:flex;align-items:center;gap:7px;min-width:0;flex-wrap:wrap}
+  .pname{font-weight:700;flex:1;display:flex;align-items:center;gap:7px;min-width:0}
   .pname span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .tag{font-size:10px;background:var(--accent2);padding:2px 7px;border-radius:20px;font-weight:700;flex-shrink:0}
   .tag.host{background:var(--warn);color:#1a1633}
   .tag.you{background:var(--good);color:#04221a}
-  .tag.spectator-tag{background:rgba(255,255,255,.2);color:var(--muted)}
   .hearts{letter-spacing:2px;font-size:15px;flex-shrink:0}
 
   /* Game */
@@ -133,8 +134,6 @@
   .hint{font-size:12px;color:var(--muted);text-align:center;margin-top:14px;line-height:1.6}
   ::-webkit-scrollbar{width:7px;height:7px}
   ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:10px}
-
-  .reconnect-info{color:var(--muted);font-size:12px;text-align:center;margin-top:8px}
 </style>
 </head>
 <body>
@@ -154,7 +153,6 @@
       <input type="text" id="nick" maxlength="16" placeholder="hal. SpeedTyper" autocomplete="off" />
       <button class="btn" id="enterBtn">Pumasok 🚪</button>
       <p class="hint">2-4 players • 3 ❤️ kada isa • 12s kada turn<br>Bumuo ng salita gamit ang huling letra ng nauna!</p>
-      <p class="reconnect-info">💾 Automatic na magre-reconnect sa pag-refresh</p>
     </div>
   </section>
 
@@ -163,11 +161,8 @@
     <div class="logo"><h1>Lobby</h1></div>
     <div class="card">
       <div class="lobby-head">
-        <div class="left">
-          <span class="pill">👤 <b id="lobbyNick"></b></span>
-          <button class="btn small sec" id="refreshBtn">↻ Refresh</button>
-        </div>
-        <button class="btn small danger" id="logoutBtn">🚪 Logout</button>
+        <span class="pill">👤 <b id="lobbyNick"></b></span>
+        <button class="btn small sec" id="refreshBtn">↻ Refresh</button>
       </div>
       <button class="btn" id="createBtn">➕ Gumawa ng Room</button>
       <div style="margin:16px 0 8px;color:var(--muted);font-size:13px;letter-spacing:1px">AVAILABLE ROOMS</div>
@@ -181,10 +176,7 @@
     <div class="card">
       <div class="lobby-head">
         <span class="pill" id="roomStatePill">Naghihintay…</span>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn small sec" id="leaveBtn">← Umalis</button>
-          <button class="btn small danger" id="roomLogoutBtn">🚪 Logout</button>
-        </div>
+        <button class="btn small sec" id="leaveBtn">← Umalis</button>
       </div>
       <div class="players" id="roomPlayers"></div>
       <button class="btn good" id="startBtn">▶ Simulan ang Laro</button>
@@ -195,9 +187,6 @@
   <!-- GAME -->
   <section class="screen" id="screen-game">
     <div class="card">
-      <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
-        <button class="btn small danger" id="gameLogoutBtn">🚪 Logout</button>
-      </div>
       <div class="players" id="gamePlayers"></div>
 
       <div class="stage">
@@ -229,11 +218,10 @@
       </div>
       <button class="btn good" id="againBtn">🔁 Maglaro Ulit</button>
       <button class="btn sec" id="backLobbyBtn">← Balik sa Lobby</button>
-      <button class="btn danger" id="overLogoutBtn">🚪 Logout</button>
     </div>
   </section>
 
 </div>
 <script src="app.js"></script>
-</body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a0e3fe229ed0fdaa',t:'MTc4MTg4NzQwNg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
