@@ -131,6 +131,27 @@
   .toast{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:var(--bad);color:#fff;
     padding:11px 18px;border-radius:30px;font-size:14px;font-weight:600;z-index:60;opacity:0;transition:.3s;pointer-events:none}
   .toast.show{opacity:1}
+
+  /* Red flash + screen shake for wrong-word penalty */
+  .flash{position:fixed;inset:0;background:radial-gradient(circle,rgba(255,80,80,.55),rgba(255,0,0,0) 70%);
+    pointer-events:none;opacity:0;z-index:55;transition:opacity .15s}
+  .flash.show{opacity:1;animation:flashfade .35s ease}
+  @keyframes flashfade{0%{opacity:0}30%{opacity:1}100%{opacity:0}}
+  .shake{animation:shake .55s cubic-bezier(.36,.07,.19,.97) both}
+  @keyframes shake{
+    10%,90%{transform:translateX(-2px)}
+    20%,80%{transform:translateX(4px)}
+    30%,50%,70%{transform:translateX(-8px)}
+    40%,60%{transform:translateX(8px)}
+  }
+
+  /* Top-right floating control bar (Logout / Mute) */
+  .topbar{position:fixed;top:10px;right:10px;display:flex;gap:6px;z-index:50}
+  .topbar .iconbtn{background:rgba(0,0,0,.45);color:#fff;border:1px solid rgba(255,255,255,.15);
+    border-radius:30px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;backdrop-filter:blur(8px);
+    transition:.15s;letter-spacing:.5px}
+  .topbar .iconbtn:hover{background:rgba(255,94,126,.4);border-color:var(--accent)}
+  .topbar .iconbtn:active{transform:scale(.94)}
   .hint{font-size:12px;color:var(--muted);text-align:center;margin-top:14px;line-height:1.6}
   ::-webkit-scrollbar{width:7px;height:7px}
   ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:10px}
@@ -138,9 +159,15 @@
 </head>
 <body>
 <div class="toast" id="toast"></div>
+<div class="flash" id="flash"></div>
 <div class="overlay" id="overlay">
   <div class="cd-label">Magsisimula sa</div>
   <div class="cd-num" id="cdNum">5</div>
+</div>
+
+<div class="topbar">
+  <button class="iconbtn" id="musicBtn" title="Toggle theme music">🎵 ON</button>
+  <button class="iconbtn" id="muteBtn" title="Toggle sound effects">🔊 SFX</button>
 </div>
 
 <div class="app">
@@ -162,7 +189,11 @@
     <div class="card">
       <div class="lobby-head">
         <span class="pill">👤 <b id="lobbyNick"></b></span>
-        <button class="btn small sec" id="refreshBtn">↻ Refresh</button>
+        <div class="row" style="gap:6px">
+          <button class="btn small sec" id="changeNickBtn" title="Palitan ang nickname">✏️</button>
+          <button class="btn small sec" id="refreshBtn">↻ Refresh</button>
+          <button class="btn small sec" id="logoutBtn" title="Mag-logout" style="background:rgba(255,94,126,.3)">🚪 Logout</button>
+        </div>
       </div>
       <button class="btn" id="createBtn">➕ Gumawa ng Room</button>
       <div style="margin:16px 0 8px;color:var(--muted);font-size:13px;letter-spacing:1px">AVAILABLE ROOMS</div>
@@ -223,5 +254,5 @@
 
 </div>
 <script src="app.js"></script>
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a0e3fe229ed0fdaa',t:'MTc4MTg4NzQwNg=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a0e40b1b290cce62',t:'MTc4MTg4NzkzNw=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
