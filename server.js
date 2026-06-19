@@ -48,7 +48,6 @@ const MAX_PLAYERS = 4;
 const MIN_PLAYERS = 2;
 const START_LETTERS_COUNT = 4;
 const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-// Letters that are reasonable to start a word with (avoid x, z, q as forced starts)
 const FRIENDLY_LETTERS = 'ABCDEFGHILMNOPRSTUW';
 
 function uid() { return Math.random().toString(36).slice(2, 10); }
@@ -60,10 +59,8 @@ function makeStartLetters() {
   return [...set];
 }
 
-// Does the dictionary contain at least one word starting with this letter (that isn't used)?
 function hasWordForLetter(letter, used) {
   letter = letter.toLowerCase();
-  // quick check: most letters have plenty; just confirm existence
   for (const w of DICT) {
     if (w[0] === letter && !used.has(w)) return true;
   }
@@ -71,25 +68,20 @@ function hasWordForLetter(letter, used) {
 }
 
 // ---------- Rooms ----------
-/*
-room = {
-  id, name, players: Map(clientId -> player), state: 'lobby'|'countdown'|'playing'|'ended',
-  hostId, order: [clientId...], turnIndex, currentLetter, usedWords: Set,
-  timer, countdownTimer, turnDeadline, winnerId
-}
-player = { id, nick, hearts, alive, ws, connected }
-*/
 const rooms = new Map();
+
+// Track all connected clients for persistence
+const clients = new Map(); // ws.id -> { nick, ws }
 
 function publicRoomList() {
   return [...rooms.values()]
-    .filter(r => r.state === 'lobby' || r.state === 'countdown')
     .map(r => ({
       id: r.id,
       name: r.name,
       players: r.players.size,
       max: MAX_PLAYERS,
       state: r.state,
+      inGame: r.state === 'playing' || r.state === 'ended',
     }));
 }
 
@@ -101,6 +93,23 @@ function broadcastLobby() {
 }
 
 function roomStatePayload(room) {
+  const players = room.order
+    .map(id => room.players.get(id))
+    .filter(Boolean)
+    .map(p => ({ 
+      id: p.id, 
+      nick: p.nick, 
+      hearts: p.hearts, 
+      alive: p.alive, 
+      connected: p.connected,
+      isSpectator: !p.alive && room.state === 'playing'
+    }));
+  
+  // Add any players not yet in order
+  const lobbyPlayers = [...room.players.values()]
+    .filter(p => !room.order.includes(p.id))
+    .map(p => ({ id: p.id, nick: p.nick, hearts: p.hearts, alive: p.alive, connected: p.connected }));
+
   return {
     type: 'roomState',
     room: {
@@ -112,12 +121,8 @@ function roomStatePayload(room) {
       turnPlayerId: room.state === 'playing' ? room.order[room.turnIndex] : null,
       turnSeconds: TURN_SECONDS,
       usedCount: room.usedWords.size,
-      players: room.order
-        .map(id => room.players.get(id))
-        .filter(Boolean)
-        .map(p => ({ id: p.id, nick: p.nick, hearts: p.hearts, alive: p.alive, connected: p.connected })),
-      // also include players not yet in order (lobby)
-      lobbyPlayers: [...room.players.values()].map(p => ({ id: p.id, nick: p.nick, hearts: p.hearts, alive: p.alive, connected: p.connected })),
+      players: players,
+      lobbyPlayers: lobbyPlayers,
       winnerId: room.winnerId || null,
     },
   };
@@ -180,11 +185,13 @@ function beginGame(room) {
     const j = Math.floor(Math.random() * (i + 1));
     [room.order[i], room.order[j]] = [room.order[j], room.order[i]];
   }
-  for (const p of room.players.values()) { p.hearts = START_HEARTS; p.alive = true; }
+  for (const p of room.players.values()) { 
+    p.hearts = START_HEARTS; 
+    p.alive = true; 
+  }
   room.turnIndex = 0;
-  // initial set of random letters; first player picks one
   room.startLetters = makeStartLetters();
-  room.currentLetter = null; // null means "pick from startLetters"
+  room.currentLetter = null;
   room.winnerId = null;
   roomEvent(room, 'Nagsimula na ang laro! Matira matibay! 🔥', 'start');
   pushRoomState(room);
@@ -224,10 +231,11 @@ function onTimeout(room) {
   roomEvent(room, `⏱️ Naubusan ng oras si ${p.nick}! -1 ❤️ (natitira: ${Math.max(0, p.hearts)})`, 'timeout');
   if (p.hearts <= 0) {
     p.alive = false;
-    roomEvent(room, `💀 Talo na si ${p.nick}!`, 'dead');
+    roomEvent(room, `💀 Talo na si ${p.nick}! (nagiging spectator)`, 'dead');
+    // Check if game is over (only 1 alive player left)
+    if (checkGameOver(room)) return;
   }
   pushRoomState(room);
-  if (checkGameOver(room)) return;
   // If player timed out during pick-mode, keep pick-mode for next player too
   advanceTurn(room);
 }
@@ -268,7 +276,7 @@ function handleWord(room, player, rawWord) {
     return;
   }
   const word = String(rawWord || '').trim().toLowerCase();
-  // pick-mode: first move OR after a timeout in pick-mode -> player must choose a start letter implicitly via first letter of word
+  
   if (room.currentLetter === null) {
     if (!/^[a-z]+$/.test(word) || word.length < 2) {
       player.ws.send(JSON.stringify({ type: 'rejected', reason: 'Letters lang at least 2 ang haba.' }));
@@ -285,7 +293,7 @@ function handleWord(room, player, rawWord) {
     acceptWord(room, player, word);
     return;
   }
-  // normal mode
+  
   if (!/^[a-z]+$/.test(word) || word.length < 2) {
     player.ws.send(JSON.stringify({ type: 'rejected', reason: 'Letters lang at least 2 ang haba.' }));
     return;
@@ -323,6 +331,10 @@ wss.on('connection', (ws) => {
   ws.id = uid();
   ws.roomId = null;
   ws.isLobby = false;
+  ws.nick = null;
+
+  // Store client info
+  clients.set(ws.id, { ws, nick: null });
 
   ws.on('message', (buf) => {
     let msg;
@@ -345,8 +357,15 @@ function handleMessage(ws, msg) {
       lobbyWatchers.delete(ws);
       break;
     }
+    case 'setNick': {
+      ws.nick = sanitizeNick(msg.nick);
+      const client = clients.get(ws.id);
+      if (client) client.nick = ws.nick;
+      break;
+    }
     case 'createRoom': {
       const nick = sanitizeNick(msg.nick);
+      ws.nick = nick;
       const name = sanitizeRoomName(msg.roomName) || `${nick}'s Room`;
       const room = {
         id: uid(),
@@ -371,9 +390,14 @@ function handleMessage(ws, msg) {
     case 'joinRoom': {
       const room = rooms.get(msg.roomId);
       const nick = sanitizeNick(msg.nick);
+      ws.nick = nick;
       if (!room) { ws.send(JSON.stringify({ type: 'error', message: 'Wala na ang room.' })); return; }
+      // Don't allow joining if game is in progress or ended
+      if (room.state === 'playing' || room.state === 'ended') { 
+        ws.send(JSON.stringify({ type: 'error', message: 'Naglalaro na — hintayin ang susunod.' })); 
+        return; 
+      }
       if (room.players.size >= MAX_PLAYERS) { ws.send(JSON.stringify({ type: 'error', message: 'Puno na ang room.' })); return; }
-      if (room.state === 'playing' || room.state === 'ended') { ws.send(JSON.stringify({ type: 'error', message: 'Naglalaro na — hintayin ang susunod.' })); return; }
       joinRoomInternal(ws, room, nick);
       broadcastLobby();
       break;
@@ -395,6 +419,10 @@ function handleMessage(ws, msg) {
       if (!room) return;
       const player = room.players.get(ws.id);
       if (!player) return;
+      if (!player.alive) {
+        ws.send(JSON.stringify({ type: 'rejected', reason: 'Ikaw ay isang spectator na.' }));
+        return;
+      }
       handleWord(room, player, msg.word);
       break;
     }
@@ -403,19 +431,34 @@ function handleMessage(ws, msg) {
       if (!room) return;
       if (room.hostId !== ws.id) return;
       if (room.state !== 'ended') return;
+      // Reset game but keep players
       room.state = 'lobby';
       room.winnerId = null;
       room.usedWords = new Set();
-      for (const p of room.players.values()) { p.hearts = START_HEARTS; p.alive = true; }
+      room.order = [];
+      room.turnIndex = 0;
+      room.currentLetter = null;
+      room.startLetters = [];
+      for (const p of room.players.values()) { 
+        p.hearts = START_HEARTS; 
+        p.alive = true; 
+      }
       pushRoomState(room);
       broadcastLobby();
+      break;
+    }
+    case 'getRoomState': {
+      const room = rooms.get(msg.roomId);
+      if (room) {
+        ws.send(JSON.stringify(roomStatePayload(room)));
+      }
       break;
     }
   }
 }
 
 function joinRoomInternal(ws, room, nick) {
-  // remove from any previous room
+  // Remove from any previous room
   if (ws.roomId && ws.roomId !== room.id) leaveRoom(ws);
   ws.roomId = room.id;
   lobbyWatchers.delete(ws);
@@ -442,24 +485,25 @@ function leaveRoom(ws) {
     broadcastLobby();
     return;
   }
-  // reassign host
+  
+  // Reassign host
   if (room.hostId === ws.id) {
     room.hostId = room.players.keys().next().value;
   }
-  // if game in progress and player left
+  
+  // If game in progress and player left
   if (room.state === 'playing') {
-    // if it was their turn, advance
     const wasTurn = room.order[room.turnIndex] === ws.id;
     if (!checkGameOver(room)) {
       if (wasTurn) {
         clearTurnTimer(room);
         room.turnIndex = room.turnIndex % Math.max(1, room.order.length);
-        // ensure pointing at alive
         if (!(room.players.get(room.order[room.turnIndex]) || {}).alive) advanceTurn(room);
         else startTurnTimer(room);
       }
     }
   }
+  
   if (room.state === 'countdown' && room.players.size < MIN_PLAYERS) {
     cancelCountdown(room);
   }
@@ -469,6 +513,7 @@ function leaveRoom(ws) {
 
 function handleDisconnect(ws) {
   lobbyWatchers.delete(ws);
+  clients.delete(ws.id);
   if (ws.roomId) leaveRoom(ws);
 }
 
