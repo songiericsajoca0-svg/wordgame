@@ -13,15 +13,56 @@ function heartsStr(n){ return '❤️'.repeat(Math.max(0,n)) + '🖤'.repeat(Mat
 let ws=null, nick='', youId=null, roomId=null, hostId=null;
 let currentRoom=null, selectedLetter=null;
 let timerRAF=null, timerDeadline=0, timerTotal=12;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 5;
+
+// ---------- Persistence ----------
+function saveState() {
+  try {
+    localStorage.setItem('ctw_nick', nick);
+    localStorage.setItem('ctw_roomId', roomId || '');
+    localStorage.setItem('ctw_youId', youId || '');
+  } catch(e) {}
+}
+
+function loadState() {
+  try {
+    const savedNick = localStorage.getItem('ctw_nick');
+    const savedRoomId = localStorage.getItem('ctw_roomId');
+    const savedYouId = localStorage.getItem('ctw_youId');
+    return { nick: savedNick, roomId: savedRoomId, youId: savedYouId };
+  } catch(e) { return {}; }
+}
 
 // ---------- connection ----------
 function connect(){
   const proto = location.protocol==='https:'?'wss':'ws';
   ws = new WebSocket(`${proto}://${location.host}`);
-  ws.onopen = ()=>{ if(screens.lobby.classList.contains('active')) watchLobby(); };
+  ws.onopen = ()=>{ 
+    reconnectAttempts = 0;
+    // Restore nick
+    if (nick) {
+      sendMsg({type:'setNick', nick});
+    }
+    // Try to rejoin previous room
+    const saved = loadState();
+    if (saved.roomId && saved.youId) {
+      sendMsg({type:'getRoomState', roomId: saved.roomId});
+    }
+    if (screens.lobby.classList.contains('active')) watchLobby(); 
+  };
   ws.onmessage = ev=>handle(JSON.parse(ev.data));
-  ws.onclose = ()=>{ toast('Naputol ang koneksyon. Nire-refresh…'); setTimeout(()=>location.reload(),1500); };
+  ws.onclose = ()=>{ 
+    toast('Naputol ang koneksyon. Nagre-reconnect…');
+    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+      reconnectAttempts++;
+      setTimeout(connect, 2000 * reconnectAttempts);
+    } else {
+      toast('Hindi makakonek. I-refresh ang page.');
+    }
+  };
 }
+
 function sendMsg(o){ if(ws&&ws.readyState===1) ws.send(JSON.stringify(o)); }
 function watchLobby(){ sendMsg({type:'watchLobby'}); }
 
@@ -35,10 +76,26 @@ $('enterBtn').onclick=()=>{
   if(v.length<1){ toast('Maglagay ng nickname!'); return; }
   nick=v.slice(0,16);
   $('lobbyNick').textContent=nick;
+  saveState();
   connect();
   show('lobby');
   const wait=setInterval(()=>{ if(ws&&ws.readyState===1){ watchLobby(); clearInterval(wait);} },120);
 };
+
+// Auto-login if we have saved state
+window.onload = function() {
+  const saved = loadState();
+  if (saved.nick) {
+    nick = saved.nick;
+    $('nick').value = nick;
+    $('lobbyNick').textContent = nick;
+    // Auto-connect
+    connect();
+    show('lobby');
+    const wait=setInterval(()=>{ if(ws&&ws.readyState===1){ watchLobby(); clearInterval(wait);} },120);
+  }
+};
+
 $('nick').addEventListener('keydown',e=>{ if(e.key==='Enter') $('enterBtn').click(); });
 
 // ---------- lobby ----------
@@ -46,25 +103,45 @@ $('refreshBtn').onclick=watchLobby;
 $('createBtn').onclick=()=>{ sendMsg({type:'createRoom', nick, roomName:`${nick}'s Room`}); };
 function renderRooms(rooms){
   const el=$('roomlist');
-  if(!rooms.length){ el.innerHTML='<div class="empty">Walang available na room.<br>Gumawa ng bago! 👆</div>'; return; }
+  if(!rooms || !rooms.length){ 
+    el.innerHTML='<div class="empty">Walang available na room.<br>Gumawa ng bago! 👆</div>'; 
+    return; 
+  }
   el.innerHTML='';
   rooms.forEach(r=>{
     const full=r.players>=r.max;
+    const inGame = r.state === 'playing' || r.state === 'ended';
     const div=document.createElement('div');
     div.className='roomitem';
     div.innerHTML=`<div><div style="font-weight:700">${esc(r.name)}</div>
-      <div class="meta">${r.players}/${r.max} players • ${r.state==='countdown'?'magsisimula na…':'naghihintay'}</div></div>`;
+      <div class="meta">${r.players}/${r.max} players • ${inGame ? '🔴 Naglalaro' : (r.state==='countdown'?'⏳ Magsisimula…':'🟢 Naghihintay')}</div></div>`;
     const btn=document.createElement('button');
-    btn.className='btn small'; btn.textContent=full?'Puno':'Sali';
-    btn.disabled=full;
-    btn.onclick=()=>sendMsg({type:'joinRoom', roomId:r.id, nick});
+    btn.className='btn small';
+    if (inGame) {
+      btn.textContent='🔴 In Game';
+      btn.disabled=true;
+    } else if (full) {
+      btn.textContent='Puno';
+      btn.disabled=true;
+    } else {
+      btn.textContent='Sali';
+      btn.onclick=()=>sendMsg({type:'joinRoom', roomId:r.id, nick});
+    }
     div.appendChild(btn);
     el.appendChild(div);
   });
 }
 
 // ---------- room ----------
-$('leaveBtn').onclick=()=>{ sendMsg({type:'leaveRoom'}); roomId=null; show('lobby'); watchLobby(); };
+$('leaveBtn').onclick=()=>{ 
+  sendMsg({type:'leaveRoom'}); 
+  roomId=null; 
+  youId=null;
+  localStorage.removeItem('ctw_roomId');
+  localStorage.removeItem('ctw_youId');
+  show('lobby'); 
+  watchLobby(); 
+};
 $('startBtn').onclick=()=>sendMsg({type:'startGame'});
 
 function renderRoom(room){
@@ -84,11 +161,16 @@ function renderRoom(room){
 
 function playerCard(p, hostIdLocal, inGame){
   const d=document.createElement('div');
-  d.className='pcard'+(!p.alive&&inGame?' dead':'');
+  d.className='pcard';
+  if (inGame) {
+    if (!p.alive) d.classList.add('dead');
+    if (p.isSpectator) d.classList.add('spectator');
+  }
   const initial=(p.nick[0]||'?').toUpperCase();
   let tags='';
   if(p.id===hostIdLocal) tags+='<span class="tag host">HOST</span>';
   if(p.id===youId) tags+='<span class="tag you">IKAW</span>';
+  if(p.isSpectator) tags+='<span class="tag spectator-tag">👀 SPECTATOR</span>';
   d.innerHTML=`<div class="avatar" style="background:${avatarColor(p.id)}">${esc(initial)}</div>
     <div class="pname"><span>${esc(p.nick)}</span>${tags}</div>
     <div class="hearts">${inGame?heartsStr(p.hearts):''}</div>`;
@@ -101,7 +183,7 @@ function renderGamePlayers(room){
   const pe=$('gamePlayers'); pe.innerHTML='';
   (room.players||[]).forEach(p=>{
     const c=playerCard(p,room.hostId,true);
-    if(room.turnPlayerId===p.id) c.classList.add('turn');
+    if(room.turnPlayerId===p.id && p.alive) c.classList.add('turn');
     pe.appendChild(c);
   });
 }
@@ -110,9 +192,20 @@ function setTurnUI(room){
   const myTurn = room.turnPlayerId===youId;
   const me=(room.players||[]).find(p=>p.id===youId);
   const turnP=(room.players||[]).find(p=>p.id===room.turnPlayerId);
+  
+  const isSpectator = me && !me.alive;
+  
+  if (isSpectator) {
+    $('turnLabel').textContent = '👀 Nanonood ka na (spectator)';
+    $('bigLetter').textContent = room.currentLetter || '?';
+    $('wordInput').disabled=true;
+    $('submitBtn').disabled=true;
+    renderLetters(null, false);
+    return;
+  }
+  
   $('turnLabel').textContent = myTurn ? '👉 IKAW ang turn!' : (turnP?`Turn ni ${turnP.nick}…`:'—');
   $('bigLetter').textContent = room.currentLetter || '?';
-  // input enable only on my turn & alive
   const canPlay = myTurn && me && me.alive;
   $('wordInput').disabled=!canPlay;
   $('submitBtn').disabled=!canPlay;
@@ -156,7 +249,6 @@ function renderLetters(letters, active){
 function submitWord(){
   let w=$('wordInput').value.trim().toLowerCase();
   if(!w) return;
-  // pick mode: enforce chosen letter if any selected
   sendMsg({type:'submitWord', word:w});
 }
 $('submitBtn').onclick=submitWord;
@@ -173,7 +265,15 @@ function addLog(text, kind){
 
 // ---------- game over ----------
 $('againBtn').onclick=()=>{ sendMsg({type:'playAgain'}); };
-$('backLobbyBtn').onclick=()=>{ sendMsg({type:'leaveRoom'}); roomId=null; show('lobby'); watchLobby(); };
+$('backLobbyBtn').onclick=()=>{ 
+  sendMsg({type:'leaveRoom'}); 
+  roomId=null; 
+  youId=null;
+  localStorage.removeItem('ctw_roomId');
+  localStorage.removeItem('ctw_youId');
+  show('lobby'); 
+  watchLobby(); 
+};
 
 // ---------- overlay countdown ----------
 function showCountdown(v){
@@ -188,16 +288,42 @@ function handle(m){
   switch(m.type){
     case 'roomList': renderRooms(m.rooms); break;
     case 'joined':
-      roomId=m.roomId; youId=m.youId; hostId=m.hostId; show('room'); break;
+      roomId=m.roomId; youId=m.youId; hostId=m.hostId;
+      saveState();
+      show('room'); 
+      break;
     case 'roomState':
       currentRoom=m.room;
-      if(m.room.state==='lobby'||m.room.state==='countdown'){
+      if (m.room.state==='lobby'||m.room.state==='countdown'){
         if(!screens.over.classList.contains('active')) show('room');
         renderRoom(m.room);
       } else if(m.room.state==='playing'){
-        show('game'); renderGamePlayers(m.room); setTurnUI(m.room);
+        show('game'); 
+        renderGamePlayers(m.room); 
+        setTurnUI(m.room);
+        // Check if we're a spectator
+        const me = (m.room.players||[]).find(p=>p.id===youId);
+        if (me && !me.alive) {
+          $('turnLabel').textContent = '👀 Nanonood ka na (spectator)';
+          $('wordInput').disabled=true;
+          $('submitBtn').disabled=true;
+        }
       } else if(m.room.state==='ended'){
         renderGamePlayers(m.room);
+        // Check if we should show game over
+        setTimeout(()=>{
+          if (m.room.winnerId === youId) {
+            show('over');
+            $('winName').textContent='🎉 IKAW ang Panalo!';
+            $('winSub').textContent='Matira matibay champion!';
+          } else if (m.room.winnerId) {
+            const winner = (m.room.players||[]).find(p=>p.id===m.room.winnerId);
+            show('over');
+            $('winName').textContent=`🏆 Panalo si ${winner ? winner.nick : '?'}`;
+            $('winSub').textContent='Mas swerte sa susunod!';
+          }
+          $('againBtn').style.display = (hostId===youId)?'block':'none';
+        }, 700);
       }
       break;
     case 'countdown':
@@ -212,6 +338,18 @@ function handle(m){
       hideCountdown();
       $('rejected').textContent='';
       $('wordInput').value='';
+      const me = (currentRoom && currentRoom.players||[]).find(p=>p.id===youId);
+      const isSpectator = me && !me.alive;
+      
+      if (isSpectator) {
+        renderLetters(null, false);
+        $('turnLabel').textContent = '👀 Nanonood ka na (spectator)';
+        $('wordInput').disabled=true;
+        $('submitBtn').disabled=true;
+        startTimer(m.deadline, m.seconds);
+        return;
+      }
+      
       const myTurn = m.turnPlayerId===youId;
       if(m.pickMode){
         renderLetters(m.letters, myTurn);
@@ -237,18 +375,10 @@ function handle(m){
       break;
     case 'gameOver':
       stopTimer();
-      setTimeout(()=>{
-        show('over');
-        if(m.winnerId===youId){ $('winName').textContent='🎉 IKAW ang Panalo!'; $('winSub').textContent='Matira matibay champion!'; }
-        else if(m.winnerNick){ $('winName').textContent=`Panalo si ${m.winnerNick}`; $('winSub').textContent='Mas swerte sa susunod!'; }
-        else { $('winName').textContent='Tabla!'; $('winSub').textContent='Walang natira.'; }
-        $('againBtn').style.display = (hostId===youId)?'block':'none';
-      }, 700);
       break;
     case 'error':
       toast(m.message); break;
   }
-  // track host
   if(currentRoom) hostId=currentRoom.hostId;
 }
 
