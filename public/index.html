@@ -71,13 +71,15 @@
     border:2px solid transparent;transition:.2s}
   .pcard.turn{border-color:var(--warn);box-shadow:0 0 18px rgba(255,209,102,.35);background:rgba(255,209,102,.10)}
   .pcard.dead{opacity:.4;filter:grayscale(.7)}
+  .pcard.spectator{opacity:.5;border-color:rgba(255,255,255,.1)}
   .avatar{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;
     font-weight:800;font-size:18px;color:#1a1633;flex-shrink:0}
-  .pname{font-weight:700;flex:1;display:flex;align-items:center;gap:7px;min-width:0}
+  .pname{font-weight:700;flex:1;display:flex;align-items:center;gap:7px;min-width:0;flex-wrap:wrap}
   .pname span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .tag{font-size:10px;background:var(--accent2);padding:2px 7px;border-radius:20px;font-weight:700;flex-shrink:0}
   .tag.host{background:var(--warn);color:#1a1633}
   .tag.you{background:var(--good);color:#04221a}
+  .tag.spectator-tag{background:rgba(255,255,255,.2);color:var(--muted)}
   .hearts{letter-spacing:2px;font-size:15px;flex-shrink:0}
 
   /* Game */
@@ -128,6 +130,8 @@
   .hint{font-size:12px;color:var(--muted);text-align:center;margin-top:14px;line-height:1.6}
   ::-webkit-scrollbar{width:7px;height:7px}
   ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:10px}
+
+  .reconnect-info{color:var(--muted);font-size:12px;text-align:center;margin-top:8px}
 </style>
 </head>
 <body>
@@ -147,6 +151,7 @@
       <input type="text" id="nick" maxlength="16" placeholder="hal. SpeedTyper" autocomplete="off" />
       <button class="btn" id="enterBtn">Pumasok 🚪</button>
       <p class="hint">2-4 players • 3 ❤️ kada isa • 12s kada turn<br>Bumuo ng salita gamit ang huling letra ng nauna!</p>
+      <p class="reconnect-info">💾 Automatic na magre-reconnect sa pag-refresh</p>
     </div>
   </section>
 
