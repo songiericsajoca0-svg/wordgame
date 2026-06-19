@@ -47,10 +47,11 @@ const START_HEARTS = 3;
 const MAX_PLAYERS = 4;
 const MIN_PLAYERS = 2;
 const START_LETTERS_COUNT = 4;
-const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const RECONNECT_GRACE_MS = 60_000; // how long a disconnected player can rejoin
 const FRIENDLY_LETTERS = 'ABCDEFGHILMNOPRSTUW';
 
 function uid() { return Math.random().toString(36).slice(2, 10); }
+function tok() { return Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10); }
 function randLetter(pool) { return pool[Math.floor(Math.random() * pool.length)]; }
 
 function makeStartLetters() {
@@ -59,30 +60,50 @@ function makeStartLetters() {
   return [...set];
 }
 
-function hasWordForLetter(letter, used) {
-  letter = letter.toLowerCase();
-  for (const w of DICT) {
-    if (w[0] === letter && !used.has(w)) return true;
-  }
-  return false;
+// ---------- Rooms ----------
+/*
+room = {
+  id, name, players: Map(playerId -> player), state: 'lobby'|'countdown'|'playing'|'ended',
+  hostId, order: [playerId...], turnIndex, currentLetter, usedWords: Set,
+  timer, countdownTimer, turnDeadline, winnerId, startLetters
+}
+player = {
+  id,            // persistent player id == auth token (stable across refresh)
+  nick,
+  hearts, alive,
+  isSpectator,   // true => was originally a player but ran out of hearts; stays in room watching
+  ws,            // current ws, may be null while disconnected
+  connected,
+  disconnectAt,  // timestamp if currently disconnected
 }
 
-// ---------- Rooms ----------
+Each WebSocket gets:
+  ws.playerId   (persistent id from client token, used as room key)
+  ws.roomId
+  ws.isLobby
+*/
 const rooms = new Map();
-
-// Track all connected clients for persistence
-const clients = new Map(); // ws.id -> { nick, ws }
+// Track recently-disconnected players so refresh can resume them without losing state
+// key: playerId -> { roomId, expiresAt }
+const reconnectIndex = new Map();
 
 function publicRoomList() {
-  return [...rooms.values()]
-    .map(r => ({
-      id: r.id,
-      name: r.name,
-      players: r.players.size,
-      max: MAX_PLAYERS,
-      state: r.state,
-      inGame: r.state === 'playing' || r.state === 'ended',
-    }));
+  // Show ALL rooms (including playing/ended) so users see what's in progress.
+  return [...rooms.values()].map(r => ({
+    id: r.id,
+    name: r.name,
+    players: countActive(r),
+    max: MAX_PLAYERS,
+    state: r.state,
+    canJoin: (r.state === 'lobby' || r.state === 'countdown') && countActive(r) < MAX_PLAYERS,
+  }));
+}
+
+function countActive(room) {
+  // count non-spectator players for capacity purposes
+  let n = 0;
+  for (const p of room.players.values()) if (!p.isSpectator) n++;
+  return n;
 }
 
 function broadcastLobby() {
@@ -93,23 +114,10 @@ function broadcastLobby() {
 }
 
 function roomStatePayload(room) {
-  const players = room.order
-    .map(id => room.players.get(id))
-    .filter(Boolean)
-    .map(p => ({ 
-      id: p.id, 
-      nick: p.nick, 
-      hearts: p.hearts, 
-      alive: p.alive, 
-      connected: p.connected,
-      isSpectator: !p.alive && room.state === 'playing'
-    }));
-  
-  // Add any players not yet in order
-  const lobbyPlayers = [...room.players.values()]
-    .filter(p => !room.order.includes(p.id))
-    .map(p => ({ id: p.id, nick: p.nick, hearts: p.hearts, alive: p.alive, connected: p.connected }));
-
+  const all = [...room.players.values()].map(p => ({
+    id: p.id, nick: p.nick, hearts: p.hearts, alive: p.alive,
+    isSpectator: !!p.isSpectator, connected: !!p.connected,
+  }));
   return {
     type: 'roomState',
     room: {
@@ -120,9 +128,15 @@ function roomStatePayload(room) {
       currentLetter: room.currentLetter,
       turnPlayerId: room.state === 'playing' ? room.order[room.turnIndex] : null,
       turnSeconds: TURN_SECONDS,
+      turnDeadline: room.state === 'playing' ? room.turnDeadline : null,
       usedCount: room.usedWords.size,
-      players: players,
-      lobbyPlayers: lobbyPlayers,
+      startLetters: room.startLetters || [],
+      pickMode: room.state === 'playing' && room.currentLetter === null,
+      players: room.order
+        .map(id => room.players.get(id))
+        .filter(Boolean)
+        .map(p => ({ id: p.id, nick: p.nick, hearts: p.hearts, alive: p.alive, isSpectator: !!p.isSpectator, connected: !!p.connected })),
+      lobbyPlayers: all,
       winnerId: room.winnerId || null,
     },
   };
@@ -149,7 +163,7 @@ const lobbyWatchers = new Set();
 // ---------- Game flow ----------
 function startCountdown(room) {
   if (room.state !== 'lobby') return;
-  if (room.players.size < MIN_PLAYERS) return;
+  if (countActive(room) < MIN_PLAYERS) return;
   room.state = 'countdown';
   let count = START_COUNTDOWN;
   pushRoomState(room);
@@ -179,15 +193,18 @@ function cancelCountdown(room) {
 function beginGame(room) {
   room.state = 'playing';
   room.usedWords = new Set();
-  room.order = [...room.players.keys()];
-  // shuffle order
+  // only non-spectator players play
+  const playerIds = [...room.players.values()].filter(p => !p.isSpectator).map(p => p.id);
+  room.order = playerIds;
   for (let i = room.order.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [room.order[i], room.order[j]] = [room.order[j], room.order[i]];
   }
-  for (const p of room.players.values()) { 
-    p.hearts = START_HEARTS; 
-    p.alive = true; 
+  for (const id of room.order) {
+    const p = room.players.get(id);
+    p.hearts = START_HEARTS;
+    p.alive = true;
+    p.isSpectator = false;
   }
   room.turnIndex = 0;
   room.startLetters = makeStartLetters();
@@ -231,12 +248,15 @@ function onTimeout(room) {
   roomEvent(room, `⏱️ Naubusan ng oras si ${p.nick}! -1 ❤️ (natitira: ${Math.max(0, p.hearts)})`, 'timeout');
   if (p.hearts <= 0) {
     p.alive = false;
-    roomEvent(room, `💀 Talo na si ${p.nick}! (nagiging spectator)`, 'dead');
-    // Check if game is over (only 1 alive player left)
-    if (checkGameOver(room)) return;
+    p.isSpectator = true; // becomes spectator, stays in room
+    roomEvent(room, `💀 Talo na si ${p.nick}! Magiging spectator.`, 'dead');
+    // notify the specific player they're now spectator
+    if (p.ws && p.ws.readyState === p.ws.OPEN) {
+      p.ws.send(JSON.stringify({ type: 'youSpectate', reason: 'Naubos ang hearts mo.' }));
+    }
   }
   pushRoomState(room);
-  // If player timed out during pick-mode, keep pick-mode for next player too
+  if (checkGameOver(room)) return;
   advanceTurn(room);
 }
 
@@ -258,7 +278,6 @@ function checkGameOver(room) {
 
 function advanceTurn(room) {
   if (room.state !== 'playing') return;
-  // move to next alive player
   let guard = 0;
   do {
     room.turnIndex = (room.turnIndex + 1) % room.order.length;
@@ -270,13 +289,16 @@ function advanceTurn(room) {
 
 function handleWord(room, player, rawWord) {
   if (room.state !== 'playing') return;
+  if (player.isSpectator || !player.alive) {
+    player.ws && player.ws.send(JSON.stringify({ type: 'rejected', reason: 'Spectator ka na — manood ka na lang.' }));
+    return;
+  }
   const pid = room.order[room.turnIndex];
   if (pid !== player.id) {
     player.ws.send(JSON.stringify({ type: 'rejected', reason: 'Hindi pa ikaw ang turn.' }));
     return;
   }
   const word = String(rawWord || '').trim().toLowerCase();
-  
   if (room.currentLetter === null) {
     if (!/^[a-z]+$/.test(word) || word.length < 2) {
       player.ws.send(JSON.stringify({ type: 'rejected', reason: 'Letters lang at least 2 ang haba.' }));
@@ -293,7 +315,6 @@ function handleWord(room, player, rawWord) {
     acceptWord(room, player, word);
     return;
   }
-  
   if (!/^[a-z]+$/.test(word) || word.length < 2) {
     player.ws.send(JSON.stringify({ type: 'rejected', reason: 'Letters lang at least 2 ang haba.' }));
     return;
@@ -328,13 +349,10 @@ function acceptWord(room, player, word) {
 const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws) => {
-  ws.id = uid();
+  ws.id = uid();              // ephemeral connection id
+  ws.playerId = null;         // assigned after 'hello'
   ws.roomId = null;
   ws.isLobby = false;
-  ws.nick = null;
-
-  // Store client info
-  clients.set(ws.id, { ws, nick: null });
 
   ws.on('message', (buf) => {
     let msg;
@@ -347,6 +365,47 @@ wss.on('connection', (ws) => {
 
 function handleMessage(ws, msg) {
   switch (msg.type) {
+    case 'hello': {
+      // Client sends its persistent token (or asks for one)
+      let token = String(msg.token || '').slice(0, 64);
+      if (!token) token = tok();
+      ws.playerId = token;
+      // Try to resume previous room
+      const prev = reconnectIndex.get(token);
+      let resumedRoom = null;
+      if (prev && rooms.has(prev.roomId)) {
+        const r = rooms.get(prev.roomId);
+        const p = r.players.get(token);
+        if (p) {
+          p.ws = ws;
+          p.connected = true;
+          p.disconnectAt = null;
+          ws.roomId = r.id;
+          resumedRoom = r;
+          reconnectIndex.delete(token);
+        }
+      }
+      ws.send(JSON.stringify({ type: 'welcome', token, youId: token, resumedRoomId: resumedRoom ? resumedRoom.id : null }));
+      if (resumedRoom) {
+        ws.send(JSON.stringify({ type: 'joined', roomId: resumedRoom.id, youId: token, hostId: resumedRoom.hostId, resumed: true }));
+        pushRoomState(resumedRoom);
+        // resend current turn info if playing
+        if (resumedRoom.state === 'playing') {
+          ws.send(JSON.stringify({
+            type: 'turn',
+            turnPlayerId: resumedRoom.order[resumedRoom.turnIndex],
+            currentLetter: resumedRoom.currentLetter,
+            pickMode: resumedRoom.currentLetter === null,
+            letters: resumedRoom.currentLetter === null ? resumedRoom.startLetters : null,
+            deadline: resumedRoom.turnDeadline,
+            seconds: TURN_SECONDS,
+          }));
+        }
+        roomEvent(resumedRoom, `🔄 Nakabalik si ${resumedRoom.players.get(token).nick}.`, 'join');
+        broadcastLobby();
+      }
+      break;
+    }
     case 'watchLobby': {
       ws.isLobby = true;
       lobbyWatchers.add(ws);
@@ -355,24 +414,19 @@ function handleMessage(ws, msg) {
     }
     case 'stopWatchLobby': {
       lobbyWatchers.delete(ws);
-      break;
-    }
-    case 'setNick': {
-      ws.nick = sanitizeNick(msg.nick);
-      const client = clients.get(ws.id);
-      if (client) client.nick = ws.nick;
+      ws.isLobby = false;
       break;
     }
     case 'createRoom': {
+      if (!ws.playerId) ws.playerId = tok();
       const nick = sanitizeNick(msg.nick);
-      ws.nick = nick;
       const name = sanitizeRoomName(msg.roomName) || `${nick}'s Room`;
       const room = {
         id: uid(),
         name,
         players: new Map(),
         state: 'lobby',
-        hostId: ws.id,
+        hostId: ws.playerId,
         order: [],
         turnIndex: 0,
         currentLetter: null,
@@ -390,94 +444,152 @@ function handleMessage(ws, msg) {
     case 'joinRoom': {
       const room = rooms.get(msg.roomId);
       const nick = sanitizeNick(msg.nick);
-      ws.nick = nick;
       if (!room) { ws.send(JSON.stringify({ type: 'error', message: 'Wala na ang room.' })); return; }
-      // Don't allow joining if game is in progress or ended
-      if (room.state === 'playing' || room.state === 'ended') { 
-        ws.send(JSON.stringify({ type: 'error', message: 'Naglalaro na — hintayin ang susunod.' })); 
-        return; 
+      // allow rejoin (player already in room with same playerId) without restrictions
+      const existing = ws.playerId && room.players.get(ws.playerId);
+      if (existing) {
+        existing.ws = ws;
+        existing.connected = true;
+        existing.disconnectAt = null;
+        ws.roomId = room.id;
+        ws.send(JSON.stringify({ type: 'joined', roomId: room.id, youId: ws.playerId, hostId: room.hostId, resumed: true }));
+        pushRoomState(room);
+        broadcastLobby();
+        return;
       }
-      if (room.players.size >= MAX_PLAYERS) { ws.send(JSON.stringify({ type: 'error', message: 'Puno na ang room.' })); return; }
+      if (countActive(room) >= MAX_PLAYERS) { ws.send(JSON.stringify({ type: 'error', message: 'Puno na ang room.' })); return; }
+      if (room.state === 'playing' || room.state === 'countdown') {
+        // join as spectator
+        joinRoomInternal(ws, room, nick, { asSpectator: true });
+        broadcastLobby();
+        return;
+      }
+      if (room.state === 'ended') {
+        // allow rejoin to lobby-ish; just join as spectator until host plays again
+        joinRoomInternal(ws, room, nick, { asSpectator: true });
+        broadcastLobby();
+        return;
+      }
       joinRoomInternal(ws, room, nick);
       broadcastLobby();
       break;
     }
     case 'leaveRoom': {
-      leaveRoom(ws);
+      leaveRoom(ws, { permanent: true });
       break;
     }
     case 'startGame': {
       const room = rooms.get(ws.roomId);
       if (!room) return;
-      if (room.hostId !== ws.id) { ws.send(JSON.stringify({ type: 'error', message: 'Host lang ang pwedeng mag-start.' })); return; }
-      if (room.players.size < MIN_PLAYERS) { ws.send(JSON.stringify({ type: 'error', message: `Kailangan ng at least ${MIN_PLAYERS} players.` })); return; }
+      if (room.hostId !== ws.playerId) { ws.send(JSON.stringify({ type: 'error', message: 'Host lang ang pwedeng mag-start.' })); return; }
+      if (countActive(room) < MIN_PLAYERS) { ws.send(JSON.stringify({ type: 'error', message: `Kailangan ng at least ${MIN_PLAYERS} players.` })); return; }
       startCountdown(room);
       break;
     }
     case 'submitWord': {
       const room = rooms.get(ws.roomId);
       if (!room) return;
-      const player = room.players.get(ws.id);
+      const player = room.players.get(ws.playerId);
       if (!player) return;
-      if (!player.alive) {
-        ws.send(JSON.stringify({ type: 'rejected', reason: 'Ikaw ay isang spectator na.' }));
-        return;
-      }
       handleWord(room, player, msg.word);
       break;
     }
     case 'playAgain': {
       const room = rooms.get(ws.roomId);
       if (!room) return;
-      if (room.hostId !== ws.id) return;
+      if (room.hostId !== ws.playerId) return;
       if (room.state !== 'ended') return;
-      // Reset game but keep players
       room.state = 'lobby';
       room.winnerId = null;
       room.usedWords = new Set();
-      room.order = [];
-      room.turnIndex = 0;
-      room.currentLetter = null;
-      room.startLetters = [];
-      for (const p of room.players.values()) { 
-        p.hearts = START_HEARTS; 
-        p.alive = true; 
+      // Restore spectators back to active players (kept them in room across game)
+      for (const p of room.players.values()) {
+        p.hearts = START_HEARTS;
+        p.alive = true;
+        p.isSpectator = false;
       }
       pushRoomState(room);
       broadcastLobby();
       break;
     }
-    case 'getRoomState': {
-      const room = rooms.get(msg.roomId);
-      if (room) {
-        ws.send(JSON.stringify(roomStatePayload(room)));
-      }
-      break;
-    }
   }
 }
 
-function joinRoomInternal(ws, room, nick) {
-  // Remove from any previous room
-  if (ws.roomId && ws.roomId !== room.id) leaveRoom(ws);
+function joinRoomInternal(ws, room, nick, opts = {}) {
+  // leave any previous room
+  if (ws.roomId && ws.roomId !== room.id) leaveRoom(ws, { permanent: true });
+  if (!ws.playerId) ws.playerId = tok();
   ws.roomId = room.id;
   lobbyWatchers.delete(ws);
-  const player = { id: ws.id, nick, hearts: START_HEARTS, alive: true, ws, connected: true };
-  room.players.set(ws.id, player);
-  if (!room.order.includes(ws.id)) room.order.push(ws.id);
-  ws.send(JSON.stringify({ type: 'joined', roomId: room.id, youId: ws.id, hostId: room.hostId }));
-  roomEvent(room, `👋 Sumali si ${nick}`, 'join');
+  ws.isLobby = false;
+  const isSpectator = !!opts.asSpectator;
+  const player = {
+    id: ws.playerId,
+    nick,
+    hearts: START_HEARTS,
+    alive: !isSpectator,
+    isSpectator,
+    ws,
+    connected: true,
+    disconnectAt: null,
+  };
+  room.players.set(ws.playerId, player);
+  if (!isSpectator && !room.order.includes(ws.playerId)) room.order.push(ws.playerId);
+  ws.send(JSON.stringify({ type: 'joined', roomId: room.id, youId: ws.playerId, hostId: room.hostId, spectator: isSpectator }));
+  if (isSpectator) {
+    roomEvent(room, `👁️ Nanonood si ${nick} (spectator)`, 'join');
+  } else {
+    roomEvent(room, `👋 Sumali si ${nick}`, 'join');
+  }
   pushRoomState(room);
 }
 
-function leaveRoom(ws) {
+// `permanent`: user explicitly left (leave button) — remove now.
+// Otherwise (disconnect), keep player in room for grace period to allow refresh-resume.
+function leaveRoom(ws, opts = {}) {
   const room = rooms.get(ws.roomId);
+  const wasRoomId = ws.roomId;
   ws.roomId = null;
   if (!room) return;
-  const player = room.players.get(ws.id);
-  const nick = player ? player.nick : '?';
-  room.players.delete(ws.id);
-  room.order = room.order.filter(id => id !== ws.id);
+  const player = room.players.get(ws.playerId);
+  if (!player) return;
+  const nick = player.nick;
+
+  if (!opts.permanent) {
+    // Soft disconnect: keep player; schedule cleanup
+    player.connected = false;
+    player.disconnectAt = Date.now();
+    player.ws = null;
+    reconnectIndex.set(ws.playerId, { roomId: wasRoomId, expiresAt: Date.now() + RECONNECT_GRACE_MS });
+    roomEvent(room, `🔌 Nadiskonek si ${nick}… (naghihintay ng reconnect)`, 'leave');
+    pushRoomState(room);
+    broadcastLobby();
+    // schedule hard-removal if not back in time
+    setTimeout(() => {
+      const r = rooms.get(wasRoomId);
+      if (!r) return;
+      const p = r.players.get(player.id);
+      if (!p) return;
+      if (p.connected) return; // came back
+      // permanently remove
+      hardRemovePlayer(r, p.id);
+    }, RECONNECT_GRACE_MS + 500);
+    return;
+  }
+
+  hardRemovePlayer(room, ws.playerId);
+}
+
+function hardRemovePlayer(room, playerId) {
+  const player = room.players.get(playerId);
+  if (!player) return;
+  const nick = player.nick;
+  const wasHost = room.hostId === playerId;
+  const wasTurn = room.order[room.turnIndex] === playerId;
+
+  room.players.delete(playerId);
+  room.order = room.order.filter(id => id !== playerId);
+  reconnectIndex.delete(playerId);
   roomEvent(room, `🚪 Umalis si ${nick}`, 'leave');
 
   if (room.players.size === 0) {
@@ -485,26 +597,24 @@ function leaveRoom(ws) {
     broadcastLobby();
     return;
   }
-  
-  // Reassign host
-  if (room.hostId === ws.id) {
-    room.hostId = room.players.keys().next().value;
+  if (wasHost) {
+    // pass host to first remaining player (prefer non-spectator)
+    const next = [...room.players.values()].find(p => !p.isSpectator) || room.players.values().next().value;
+    room.hostId = next ? next.id : room.players.keys().next().value;
   }
-  
-  // If game in progress and player left
   if (room.state === 'playing') {
-    const wasTurn = room.order[room.turnIndex] === ws.id;
     if (!checkGameOver(room)) {
       if (wasTurn) {
         clearTurnTimer(room);
-        room.turnIndex = room.turnIndex % Math.max(1, room.order.length);
-        if (!(room.players.get(room.order[room.turnIndex]) || {}).alive) advanceTurn(room);
-        else startTurnTimer(room);
+        if (room.order.length > 0) {
+          room.turnIndex = room.turnIndex % room.order.length;
+          if (!(room.players.get(room.order[room.turnIndex]) || {}).alive) advanceTurn(room);
+          else startTurnTimer(room);
+        }
       }
     }
   }
-  
-  if (room.state === 'countdown' && room.players.size < MIN_PLAYERS) {
+  if (room.state === 'countdown' && countActive(room) < MIN_PLAYERS) {
     cancelCountdown(room);
   }
   pushRoomState(room);
@@ -513,8 +623,7 @@ function leaveRoom(ws) {
 
 function handleDisconnect(ws) {
   lobbyWatchers.delete(ws);
-  clients.delete(ws.id);
-  if (ws.roomId) leaveRoom(ws);
+  if (ws.roomId) leaveRoom(ws, { permanent: false });
 }
 
 function cleanupRoom(room) {
