@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Complete the Word — Matira Matibay</title>
+<style>
+  :root{
+    --bg1:#0f0c29; --bg2:#302b63; --bg3:#24243e;
+    --accent:#ff5e7e; --accent2:#7c5cff; --good:#3ddc97; --warn:#ffd166; --bad:#ff5e5e;
+    --card:rgba(255,255,255,.07); --card2:rgba(255,255,255,.12);
+    --txt:#f4f4ff; --muted:#a9a9c9;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    font-family:'Segoe UI',system-ui,-apple-system,sans-serif;
+    color:var(--txt);
+    background:linear-gradient(135deg,var(--bg1),var(--bg2),var(--bg3));
+    background-size:400% 400%;
+    animation:bgmove 18s ease infinite;
+    min-height:100vh;display:flex;align-items:center;justify-content:center;
+    padding:14px;overflow-x:hidden;
+  }
+  @keyframes bgmove{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
+  .app{width:100%;max-width:560px}
+  .screen{display:none;animation:fade .35s ease}
+  .screen.active{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+  .logo{text-align:center;margin-bottom:22px}
+  .logo h1{
+    font-size:clamp(28px,8vw,44px);font-weight:800;letter-spacing:-1px;line-height:1;
+    background:linear-gradient(90deg,#ff5e7e,#ffd166,#7c5cff);
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+  }
+  .logo p{color:var(--muted);margin-top:8px;font-size:14px;letter-spacing:3px;text-transform:uppercase}
+
+  .card{background:var(--card);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,.1);
+    border-radius:20px;padding:22px;box-shadow:0 18px 50px rgba(0,0,0,.35)}
+
+  label{display:block;font-size:13px;color:var(--muted);margin:0 0 7px 4px}
+  input[type=text]{width:100%;padding:15px 16px;border-radius:14px;border:1px solid rgba(255,255,255,.15);
+    background:rgba(0,0,0,.25);color:var(--txt);font-size:17px;outline:none;transition:.2s}
+  input[type=text]:focus{border-color:var(--accent2);box-shadow:0 0 0 3px rgba(124,92,255,.25)}
+  .btn{width:100%;padding:15px;border:none;border-radius:14px;font-size:17px;font-weight:700;cursor:pointer;
+    color:#fff;background:linear-gradient(90deg,var(--accent),var(--accent2));margin-top:14px;transition:.15s;
+    box-shadow:0 8px 22px rgba(124,92,255,.35)}
+  .btn:active{transform:scale(.97)}
+  .btn.sec{background:rgba(255,255,255,.12);box-shadow:none}
+  .btn.good{background:linear-gradient(90deg,#3ddc97,#2bb673)}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn.small{width:auto;padding:9px 16px;font-size:14px;margin:0}
+
+  .row{display:flex;gap:10px;align-items:center}
+  .spread{justify-content:space-between}
+
+  /* Lobby */
+  .lobby-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+  .pill{background:var(--card2);padding:7px 13px;border-radius:30px;font-size:13px}
+  .roomlist{display:flex;flex-direction:column;gap:10px;max-height:46vh;overflow-y:auto;margin:6px 0 4px}
+  .roomitem{background:var(--card2);border:1px solid rgba(255,255,255,.08);border-radius:14px;
+    padding:14px 16px;display:flex;justify-content:space-between;align-items:center;transition:.15s}
+  .roomitem:hover{border-color:var(--accent2)}
+  .roomitem .meta{font-size:13px;color:var(--muted)}
+  .empty{text-align:center;color:var(--muted);padding:26px 10px;font-size:14px}
+
+  /* Players */
+  .players{display:flex;flex-direction:column;gap:10px;margin:14px 0}
+  .pcard{display:flex;align-items:center;gap:12px;background:var(--card2);padding:12px 14px;border-radius:14px;
+    border:2px solid transparent;transition:.2s}
+  .pcard.turn{border-color:var(--warn);box-shadow:0 0 18px rgba(255,209,102,.35);background:rgba(255,209,102,.10)}
+  .pcard.dead{opacity:.4;filter:grayscale(.7)}
+  .avatar{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;
+    font-weight:800;font-size:18px;color:#1a1633;flex-shrink:0}
+  .pname{font-weight:700;flex:1;display:flex;align-items:center;gap:7px;min-width:0}
+  .pname span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tag{font-size:10px;background:var(--accent2);padding:2px 7px;border-radius:20px;font-weight:700;flex-shrink:0}
+  .tag.host{background:var(--warn);color:#1a1633}
+  .tag.you{background:var(--good);color:#04221a}
+  .hearts{letter-spacing:2px;font-size:15px;flex-shrink:0}
+
+  /* Game */
+  .stage{text-align:center;padding:6px 0 4px}
+  .turnlabel{font-size:14px;color:var(--muted);min-height:20px}
+  .bigletter{font-size:clamp(64px,22vw,120px);font-weight:800;line-height:1;margin:6px 0;
+    background:linear-gradient(180deg,#fff,#9d8bff);-webkit-background-clip:text;background-clip:text;color:transparent;
+    text-shadow:0 0 40px rgba(124,92,255,.4)}
+  .timerbar{height:12px;border-radius:10px;background:rgba(0,0,0,.3);overflow:hidden;margin:14px 0 4px}
+  .timerfill{height:100%;width:100%;background:linear-gradient(90deg,var(--good),var(--warn));transition:width .25s linear,background .3s}
+  .timernum{font-size:13px;color:var(--muted);margin-top:4px}
+
+  .letters{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:10px 0}
+  .lbtn{width:64px;height:64px;border-radius:16px;border:2px solid rgba(255,255,255,.18);
+    background:var(--card2);color:#fff;font-size:26px;font-weight:800;cursor:pointer;transition:.15s}
+  .lbtn:active{transform:scale(.92)}
+  .lbtn.sel{border-color:var(--good);background:rgba(61,220,151,.2)}
+
+  .inputzone{margin-top:14px}
+  .inputzone.hidden{display:none}
+  .rejected{color:var(--bad);font-size:13px;min-height:18px;text-align:center;margin-top:8px;font-weight:600}
+
+  .log{margin-top:16px;background:rgba(0,0,0,.22);border-radius:14px;padding:10px 12px;max-height:130px;overflow-y:auto;
+    font-size:13px;display:flex;flex-direction:column;gap:5px}
+  .log div{color:var(--muted)}
+  .log .word{color:var(--good)}
+  .log .timeout{color:var(--warn)}
+  .log .dead,.log .win{color:var(--accent)}
+
+  /* countdown overlay */
+  .overlay{position:fixed;inset:0;background:rgba(10,8,30,.88);backdrop-filter:blur(6px);
+    display:none;align-items:center;justify-content:center;z-index:50;flex-direction:column;gap:14px}
+  .overlay.show{display:flex}
+  .cd-num{font-size:clamp(90px,30vw,180px);font-weight:800;
+    background:linear-gradient(90deg,#ff5e7e,#ffd166);-webkit-background-clip:text;background-clip:text;color:transparent;
+    animation:pop .9s ease}
+  @keyframes pop{0%{transform:scale(.4);opacity:0}40%{transform:scale(1.1);opacity:1}100%{transform:scale(1)}}
+  .cd-label{color:var(--muted);letter-spacing:4px;text-transform:uppercase;font-size:14px}
+
+  .winbox{text-align:center;padding:10px 0}
+  .winbox .crown{font-size:64px;animation:pop .8s ease}
+  .winbox h2{font-size:30px;margin:8px 0}
+  .winbox p{color:var(--muted);margin-bottom:6px}
+
+  .toast{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:var(--bad);color:#fff;
+    padding:11px 18px;border-radius:30px;font-size:14px;font-weight:600;z-index:60;opacity:0;transition:.3s;pointer-events:none}
+  .toast.show{opacity:1}
+  .hint{font-size:12px;color:var(--muted);text-align:center;margin-top:14px;line-height:1.6}
+  ::-webkit-scrollbar{width:7px;height:7px}
+  ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:10px}
+</style>
+</head>
+<body>
+<div class="toast" id="toast"></div>
+<div class="overlay" id="overlay">
+  <div class="cd-label">Magsisimula sa</div>
+  <div class="cd-num" id="cdNum">5</div>
+</div>
+
+<div class="app">
+
+  <!-- LOGIN -->
+  <section class="screen active" id="screen-login">
+    <div class="logo"><h1>Complete the Word</h1><p>Matira Matibay</p></div>
+    <div class="card">
+      <label for="nick">Ilagay ang iyong nickname</label>
+      <input type="text" id="nick" maxlength="16" placeholder="hal. SpeedTyper" autocomplete="off" />
+      <button class="btn" id="enterBtn">Pumasok 🚪</button>
+      <p class="hint">2-4 players • 3 ❤️ kada isa • 12s kada turn<br>Bumuo ng salita gamit ang huling letra ng nauna!</p>
+    </div>
+  </section>
+
+  <!-- LOBBY -->
+  <section class="screen" id="screen-lobby">
+    <div class="logo"><h1>Lobby</h1></div>
+    <div class="card">
+      <div class="lobby-head">
+        <span class="pill">👤 <b id="lobbyNick"></b></span>
+        <button class="btn small sec" id="refreshBtn">↻ Refresh</button>
+      </div>
+      <button class="btn" id="createBtn">➕ Gumawa ng Room</button>
+      <div style="margin:16px 0 8px;color:var(--muted);font-size:13px;letter-spacing:1px">AVAILABLE ROOMS</div>
+      <div class="roomlist" id="roomlist"><div class="empty">Naghahanap ng rooms…</div></div>
+    </div>
+  </section>
+
+  <!-- ROOM (waiting) -->
+  <section class="screen" id="screen-room">
+    <div class="logo"><h1 id="roomTitle">Room</h1></div>
+    <div class="card">
+      <div class="lobby-head">
+        <span class="pill" id="roomStatePill">Naghihintay…</span>
+        <button class="btn small sec" id="leaveBtn">← Umalis</button>
+      </div>
+      <div class="players" id="roomPlayers"></div>
+      <button class="btn good" id="startBtn">▶ Simulan ang Laro</button>
+      <p class="hint" id="waitHint">Naghihintay ng host na magsimula… (kailangan 2-4 players)</p>
+    </div>
+  </section>
+
+  <!-- GAME -->
+  <section class="screen" id="screen-game">
+    <div class="card">
+      <div class="players" id="gamePlayers"></div>
+
+      <div class="stage">
+        <div class="turnlabel" id="turnLabel">—</div>
+        <div class="bigletter" id="bigLetter">?</div>
+        <div class="timerbar"><div class="timerfill" id="timerFill"></div></div>
+        <div class="timernum" id="timerNum">12s</div>
+      </div>
+
+      <div class="letters" id="lettersRow" style="display:none"></div>
+
+      <div class="inputzone" id="inputZone">
+        <input type="text" id="wordInput" placeholder="I-type ang salita…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+        <button class="btn" id="submitBtn">Ipasa ✓</button>
+        <div class="rejected" id="rejected"></div>
+      </div>
+
+      <div class="log" id="log"></div>
+    </div>
+  </section>
+
+  <!-- GAME OVER -->
+  <section class="screen" id="screen-over">
+    <div class="card">
+      <div class="winbox">
+        <div class="crown">🏆</div>
+        <h2 id="winName">Panalo!</h2>
+        <p id="winSub"></p>
+      </div>
+      <button class="btn good" id="againBtn">🔁 Maglaro Ulit</button>
+      <button class="btn sec" id="backLobbyBtn">← Balik sa Lobby</button>
+    </div>
+  </section>
+
+</div>
+<script src="app.js"></script>
+</body>
+</html>

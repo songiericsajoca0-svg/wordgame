@@ -1,0 +1,19 @@
+{
+  "name": "wordchain",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "game",
+    "wordchain",
+    "multiplayer"
+  ],
+  "author": "",
+  "license": "ISC",
+  "description": "Complete the Word - real-time multiplayer word chain battle (matira matibay)",
+  "dependencies": {
+    "ws": "^8.21.0"
+  }
+}
